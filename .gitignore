@@ -166,4 +166,7 @@ cython_debug/
 data/training/*
 
 # VSCode Debug
-.vscode
+.vscodeoutput/
+checkpoint-*/
+*.bin
+*.safetensors
