@@ -78,7 +78,7 @@ DEFAULT_PAD_TOKEN = "[PAD]"
 @dataclass
 class ModelArguments:
     model_name_or_path: Optional[str] = field(
-        default="EleutherAI/pythia-12b"
+        default="EleutherAI/pythia-12b" 
     )
     trust_remote_code: Optional[bool] = field(
         default=False,
@@ -196,9 +196,11 @@ class TrainingArguments(transformers.Seq2SeqTrainingArguments):
     )
     output_dir: str = field(default='./output', metadata={"help": 'The output dir for logs and checkpoints'})
     optim: str = field(default='paged_adamw_32bit', metadata={"help": 'The optimizer to be used'})
-    per_device_train_batch_size: int = field(default=1, metadata={"help": 'The training batch size per GPU. Increase for better speed.'})
-    gradient_accumulation_steps: int = field(default=16, metadata={"help": 'How many gradients to accumulate before to perform an optimizer step'})
-    max_steps: int = field(default=10000, metadata={"help": 'How many optimizer update steps to take'})
+    # 1
+    per_device_train_batch_size: int = field(default=4, metadata={"help": 'The training batch size per GPU. Increase for better speed.'})
+    # 16
+    gradient_accumulation_steps: int = field(default=4, metadata={"help": 'How many gradients to accumulate before to perform an optimizer step'})   #max steps 
+    max_steps: int = field(default=1000, metadata={"help": 'How many optimizer update steps to take'})
     weight_decay: float = field(default=0.0, metadata={"help": 'The L2 weight decay rate of AdamW'}) # use lora dropout instead for regularization if needed
     learning_rate: float = field(default=0.0002, metadata={"help": 'The learnign rate'})
     remove_unused_columns: bool = field(default=False, metadata={"help": 'Removed unused columns. Needed to make this codebase work.'})
@@ -219,7 +221,7 @@ class GenerationArguments:
     # https://huggingface.co/docs/transformers/main_classes/text_generation#transformers.GenerationConfig
     # Length arguments
     max_new_tokens: Optional[int] = field(
-        default=256,
+        default=512,
         metadata={"help": "Maximum number of new tokens to be generated in evaluation or prediction loops"
                           "if predict_with_generate is set."}
     )
@@ -328,6 +330,7 @@ def get_accelerate_model(args, checkpoint_dir):
         trust_remote_code=args.trust_remote_code,
         use_auth_token=args.use_auth_token
     )
+    # model.resize_token_embeddings(len(tokenizer))
     if compute_dtype == torch.float16 and args.bits == 4:
         if torch.cuda.is_bf16_supported():
             print('='*80)
@@ -353,12 +356,15 @@ def get_accelerate_model(args, checkpoint_dir):
         trust_remote_code=args.trust_remote_code,
         use_auth_token=args.use_auth_token,
     )
-    if tokenizer._pad_token is None:
-        smart_tokenizer_and_embedding_resize(
-            special_tokens_dict=dict(pad_token=DEFAULT_PAD_TOKEN),
-            tokenizer=tokenizer,
-            model=model,
-        )
+    # if tokenizer._pad_token is None:
+    #     smart_tokenizer_and_embedding_resize(
+    #         special_tokens_dict=dict(pad_token=DEFAULT_PAD_TOKEN),
+    #         tokenizer=tokenizer,
+    #         model=model,
+    #     )
+    if tokenizer._pad_token is None: 
+        tokenizer.pad_token = tokenizer.eos_token
+        
     if 'llama' in args.model_name_or_path or isinstance(tokenizer, LlamaTokenizer):
         # LLaMA tokenizer may not have correct special tokens set.
         # Check and add them if missing to prevent them from being parsed into different tokens.
@@ -686,6 +692,7 @@ def get_last_checkpoint(checkpoint_dir):
     return None, False # first training
 
 def train():
+    
     hfparser = transformers.HfArgumentParser((
         ModelArguments, DataArguments, TrainingArguments, GenerationArguments
     ))
@@ -715,72 +722,77 @@ def train():
         args=training_args,
         **{k:v for k,v in data_module.items() if k != 'predict_dataset'},
     )
+    print('zamm')
+    # for batch in trainer:
+    #     print("Max input_id:", batch["input_ids"].max().item())
+    #     print("Vocab size:", model.config.vocab_size)
+    #     break
 
     # Callbacks
     if not args.full_finetune:
         trainer.add_callback(SavePeftModelCallback)
-    if args.do_mmlu_eval:
-        if args.mmlu_dataset == 'mmlu-zs':
-            mmlu_dataset = load_dataset("json", data_files={
-                'eval': 'data/mmlu/zero_shot_mmlu_val.json',
-                'test': 'data/mmlu/zero_shot_mmlu_test.json',
-            })
-            mmlu_dataset = mmlu_dataset.remove_columns('subject')
-        # MMLU Five-shot (Eval/Test only)
-        elif args.mmlu_dataset == 'mmlu' or args.mmlu_dataset == 'mmlu-fs':
-            mmlu_dataset = load_dataset("json", data_files={
-                'eval': 'data/mmlu/five_shot_mmlu_val.json',
-                'test': 'data/mmlu/five_shot_mmlu_test.json',
-            })
-            # mmlu_dataset = mmlu_dataset.remove_columns('subject')
-        mmlu_dataset = mmlu_dataset[args.mmlu_split]
-        if args.max_mmlu_samples is not None:
-            mmlu_dataset = mmlu_dataset.select(range(args.max_mmlu_samples))
-        abcd_idx = [
-            tokenizer("A", add_special_tokens=False).input_ids[0],
-            tokenizer("B", add_special_tokens=False).input_ids[0],
-            tokenizer("C", add_special_tokens=False).input_ids[0],
-            tokenizer("D", add_special_tokens=False).input_ids[0],
-        ]
-        accuracy = evaluate.load("accuracy")
-        class MMLUEvalCallback(transformers.TrainerCallback):
-            def on_evaluate(self, args, state, control, model, **kwargs):
-                data_loader = trainer.get_eval_dataloader(mmlu_dataset)
-                source_max_len = trainer.data_collator.source_max_len
-                trainer.data_collator.source_max_len = args.mmlu_source_max_len
-                trainer.model.eval()
-                preds, refs = [], []
-                loss_mmlu = 0
-                for batch in tqdm(data_loader, total=len(data_loader)):
-                    (loss, logits, labels) = trainer.prediction_step(trainer.model,batch,prediction_loss_only=False,)
-                    # There are two tokens, the output, and eos token.
-                    for i, logit in enumerate(logits):
-                        label_non_zero_id = (batch['labels'][i] != -100).nonzero()[0][0]
-                        logit_abcd = logit[label_non_zero_id-1][abcd_idx]
-                        preds.append(torch.argmax(logit_abcd).item())
-                    labels = labels[labels != IGNORE_INDEX].view(-1, 2)[:,0]
-                    refs += [abcd_idx.index(label) for label in labels.tolist()]
-                    loss_mmlu += loss.item()
-                # Extract results by subject.
-                results = {'mmlu_loss':loss_mmlu/len(data_loader)}
-                subject = mmlu_dataset['subject']
-                subjects = {s:{'refs':[], 'preds':[]} for s in set(subject)}
-                for s,p,r in zip(subject, preds, refs):
-                    subjects[s]['preds'].append(p)
-                    subjects[s]['refs'].append(r)
-                subject_scores = []
-                for subject in subjects:
-                    subject_score = accuracy.compute(
-                        references=subjects[subject]['refs'],
-                        predictions=subjects[subject]['preds']
-                    )['accuracy']
-                    results[f'mmlu_{args.mmlu_split}_accuracy_{subject}'] = subject_score
-                    subject_scores.append(subject_score)
-                results[f'mmlu_{args.mmlu_split}_accuracy'] = np.mean(subject_scores)
-                trainer.log(results)
-                trainer.data_collator.source_max_len = source_max_len
+    # if args.do_mmlu_eval:
+    #     if args.mmlu_dataset == 'mmlu-zs':
+    #         mmlu_dataset = load_dataset("json", data_files={
+    #             'eval': 'data/mmlu/zero_shot_mmlu_val.json',
+    #             'test': 'data/mmlu/zero_shot_mmlu_test.json',
+    #         })
+    #         mmlu_dataset = mmlu_dataset.remove_columns('subject')
+    #     # MMLU Five-shot (Eval/Test only)
+    #     elif args.mmlu_dataset == 'mmlu' or args.mmlu_dataset == 'mmlu-fs':
+    #         mmlu_dataset = load_dataset("json", data_files={
+    #             'eval': 'data/mmlu/five_shot_mmlu_val.json',
+    #             'test': 'data/mmlu/five_shot_mmlu_test.json',
+    #         })
+    #         # mmlu_dataset = mmlu_dataset.remove_columns('subject')
+    #     mmlu_dataset = mmlu_dataset[args.mmlu_split]
+    #     if args.max_mmlu_samples is not None:
+    #         mmlu_dataset = mmlu_dataset.select(range(args.max_mmlu_samples))
+    #     abcd_idx = [
+    #         tokenizer("A", add_special_tokens=False).input_ids[0],
+    #         tokenizer("B", add_special_tokens=False).input_ids[0],
+    #         tokenizer("C", add_special_tokens=False).input_ids[0],
+    #         tokenizer("D", add_special_tokens=False).input_ids[0],
+    #     ]
+    #     accuracy = evaluate.load("accuracy")
+    #     class MMLUEvalCallback(transformers.TrainerCallback):
+    #         def on_evaluate(self, args, state, control, model, **kwargs):
+    #             data_loader = trainer.get_eval_dataloader(mmlu_dataset)
+    #             source_max_len = trainer.data_collator.source_max_len
+    #             trainer.data_collator.source_max_len = args.mmlu_source_max_len
+    #             trainer.model.eval()
+    #             preds, refs = [], []
+    #             loss_mmlu = 0
+    #             for batch in tqdm(data_loader, total=len(data_loader)):
+    #                 (loss, logits, labels) = trainer.prediction_step(trainer.model,batch,prediction_loss_only=False,)
+    #                 # There are two tokens, the output, and eos token.
+    #                 for i, logit in enumerate(logits):
+    #                     label_non_zero_id = (batch['labels'][i] != -100).nonzero()[0][0]
+    #                     logit_abcd = logit[label_non_zero_id-1][abcd_idx]
+    #                     preds.append(torch.argmax(logit_abcd).item())
+    #                 labels = labels[labels != IGNORE_INDEX].view(-1, 2)[:,0]
+    #                 refs += [abcd_idx.index(label) for label in labels.tolist()]
+    #                 loss_mmlu += loss.item()
+    #             # Extract results by subject.
+    #             results = {'mmlu_loss':loss_mmlu/len(data_loader)}
+    #             subject = mmlu_dataset['subject']
+    #             subjects = {s:{'refs':[], 'preds':[]} for s in set(subject)}
+    #             for s,p,r in zip(subject, preds, refs):
+    #                 subjects[s]['preds'].append(p)
+    #                 subjects[s]['refs'].append(r)
+    #             subject_scores = []
+    #             for subject in subjects:
+    #                 subject_score = accuracy.compute(
+    #                     references=subjects[subject]['refs'],
+    #                     predictions=subjects[subject]['preds']
+    #                 )['accuracy']
+    #                 results[f'mmlu_{args.mmlu_split}_accuracy_{subject}'] = subject_score
+    #                 subject_scores.append(subject_score)
+    #             results[f'mmlu_{args.mmlu_split}_accuracy'] = np.mean(subject_scores)
+    #             trainer.log(results)
+    #             trainer.data_collator.source_max_len = source_max_len
 
-        trainer.add_callback(MMLUEvalCallback)
+    #     trainer.add_callback(MMLUEvalCallback)
 
     # Verifying the datatypes and parameter counts before training.
     print_trainable_parameters(args, model)
