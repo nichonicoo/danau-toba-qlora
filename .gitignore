@@ -170,3 +170,10 @@ data/training/*
 checkpoint-*/
 *.bin
 *.safetensors
+Meta-Llama-3-8B/
+output_toba_llama/
+output_toba/
+output_toba_2/
+output_toba_3/
+data/
+.venv/

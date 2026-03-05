@@ -175,15 +175,15 @@ class TrainingArguments(transformers.Seq2SeqTrainingArguments):
         metadata={"help": "How many bits to use."}
     )
     lora_r: int = field(
-        default=64,
+        default= 32, # 32 buat llama 3 8b #16, #64,
         metadata={"help": "Lora R dimension."}
     )
     lora_alpha: float = field(
-        default=16,
+        default= 64, #64 buar llama 3 8b #16,
         metadata={"help": " Lora alpha."}
     )
     lora_dropout: float = field(
-        default=0.0,
+        default=0.05, #only for llama 3 8b was 0.0
         metadata={"help":"Lora dropout."}
     )
     max_memory_MB: int = field(
@@ -200,9 +200,11 @@ class TrainingArguments(transformers.Seq2SeqTrainingArguments):
     per_device_train_batch_size: int = field(default=4, metadata={"help": 'The training batch size per GPU. Increase for better speed.'})
     # 16
     gradient_accumulation_steps: int = field(default=4, metadata={"help": 'How many gradients to accumulate before to perform an optimizer step'})   #max steps 
-    max_steps: int = field(default=1000, metadata={"help": 'How many optimizer update steps to take'})
+    # max step set 500
+    max_steps: int = field(default=500, metadata={"help": 'How many optimizer update steps to take'})
     weight_decay: float = field(default=0.0, metadata={"help": 'The L2 weight decay rate of AdamW'}) # use lora dropout instead for regularization if needed
-    learning_rate: float = field(default=0.0002, metadata={"help": 'The learnign rate'})
+    # 0.0001 bcs of less data. 
+    learning_rate: float = field(default=0.0001, metadata={"help": 'The learnign rate'})
     remove_unused_columns: bool = field(default=False, metadata={"help": 'Removed unused columns. Needed to make this codebase work.'})
     max_grad_norm: float = field(default=0.3, metadata={"help": 'Gradient clipping max norm. This is tuned and works well for all models tested.'})
     gradient_checkpointing: bool = field(default=True, metadata={"help": 'Use gradient checkpointing. You want to use this.'})
@@ -347,14 +349,22 @@ def get_accelerate_model(args, checkpoint_dir):
     model.config.torch_dtype=(torch.float32 if args.fp16 else (torch.bfloat16 if args.bf16 else torch.float32))
 
     # Tokenizer
+    # hashed only for llama 3 8b
+    # tokenizer = AutoTokenizer.from_pretrained(
+    #     args.model_name_or_path,
+    #     cache_dir=args.cache_dir,
+    #     padding_side="right",
+    #     use_fast=False, # Fast tokenizer giving issues.
+    #     tokenizer_type='llama' if 'llama' in args.model_name_or_path else None, # Needed for HF name change
+    #     trust_remote_code=args.trust_remote_code,
+    #     use_auth_token=args.use_auth_token,
+    # )
     tokenizer = AutoTokenizer.from_pretrained(
         args.model_name_or_path,
         cache_dir=args.cache_dir,
         padding_side="right",
-        use_fast=False, # Fast tokenizer giving issues.
-        tokenizer_type='llama' if 'llama' in args.model_name_or_path else None, # Needed for HF name change
+        use_fast=True,
         trust_remote_code=args.trust_remote_code,
-        use_auth_token=args.use_auth_token,
     )
     # if tokenizer._pad_token is None:
     #     smart_tokenizer_and_embedding_resize(
