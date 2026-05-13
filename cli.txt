@@ -1,0 +1,11 @@
+- login huggingface 
+    huggingface-cli login
+- create repo 
+    huggingface-cli repo create qwen-toba-merged
+    huggingface-cli repo create qwen-toba-adapter
+- upload huggingface   
+    cd (folder name)
+    - adapter   
+        hf upload USERNAME/qwen-toba-adapter ./qwen-toba-final .
+    - merged
+        hf upload USERNAME/qwen-toba-adapter ./qwen-toba-final .
