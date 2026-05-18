@@ -3,12 +3,11 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 from peft import PeftModel
 
 base_model_name = "Qwen/Qwen2-7B-Instruct"
-adapter_path = "./qwen-toba-final"
+adapter_path = "./qwen-finetuned-final"
 output_path = "./qwen-toba-merged"
 
 # Load tokenizer
 tokenizer = AutoTokenizer.from_pretrained(base_model_name, trust_remote_code=True)
-
 # Load base model (HARUS fp16/bf16, bukan 4bit)
 base_model = AutoModelForCausalLM.from_pretrained(
     base_model_name,

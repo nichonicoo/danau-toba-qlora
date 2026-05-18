@@ -7,7 +7,7 @@ from transformers import (
     BitsAndBytesConfig
 )
 from peft import LoraConfig
-from trl import SFTTrainer
+from trl import SFTTrainer, SFTConfig
 
 # =========================
 # CONFIG
@@ -86,32 +86,56 @@ def format_chat(example):
 # =========================
 # TRAINING ARGUMENTS
 # =========================
-training_args = TrainingArguments(
+# training_args = TrainingArguments(
+#     output_dir="./qwen-toba",
+#     per_device_train_batch_size=2,
+#     gradient_accumulation_steps=4,
+#     learning_rate=2e-4,
+#     num_train_epochs=3,
+#     logging_steps=10,
+#     save_steps=200,
+#     bf16=True,
+#     optim="paged_adamw_32bit",
+#     lr_scheduler_type="cosine",
+#     warmup_ratio=0.03,
+#     report_to="none"
+# )
+training_args = SFTConfig(
     output_dir="./qwen-toba",
     per_device_train_batch_size=2,
     gradient_accumulation_steps=4,
-    learning_rate=2e-4,
+    learning_rate=1e-4,
     num_train_epochs=3,
     logging_steps=10,
-    save_steps=200,
+    save_steps=100,
     bf16=True,
     optim="paged_adamw_32bit",
     lr_scheduler_type="cosine",
-    warmup_ratio=0.03,
-    report_to="none"
+    warmup_steps=50,
+    report_to="none",
+    max_length=2048,        # ← goes here in trl >= 1.0
+    dataset_text_field=None,    # using formatting_func, so set to None
 )
 
 # =========================
 # TRAINER
 # =========================
+# trainer = SFTTrainer(
+#     model=model,
+#     train_dataset=dataset["train"],
+#     peft_config=peft_config,
+#     # tokenizer=tokenizer,
+#     formatting_func=format_chat,
+#     # max_seq_length=2048,
+#     args=training_args
+# )
 trainer = SFTTrainer(
     model=model,
     train_dataset=dataset["train"],
     peft_config=peft_config,
-    tokenizer=tokenizer,
     formatting_func=format_chat,
-    max_seq_length=2048,
-    args=training_args
+    processing_class=tokenizer,   # ← ganti dari tokenizer=tokenizer
+    args=training_args,
 )
 
 # =========================
